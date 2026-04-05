@@ -7,7 +7,7 @@ import ili9341
 import xpt2046
 from micropython import const
 
-_DISPLAY_ROT = const(0xE0)
+_DISPLAY_ROT = const(0x20)  # landscape USB a la derecha
 
 
 def init_display():

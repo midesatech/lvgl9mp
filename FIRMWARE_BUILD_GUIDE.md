@@ -96,9 +96,11 @@ old = '''    def _normalize(self, x, y):
         return x, y'''
 
 new = '''    def _normalize(self, x, y):
-        # ESP32-2432S028R (CYD): ejes intercambiados, rangos raw medidos
-        px = pointer_framework.remap(y, 3750, 220, 0, self._orig_width)
-        py = pointer_framework.remap(x, 3830, 288, 0, self._orig_height)
+        # ESP32-2432S028R (CYD) MADCTL 0x20 - USB a la derecha
+        # Ejes intercambiados e invertidos segun medicion raw:
+        # Top-left=(3830,3671) Top-right=(3811,320) Bot-left=(258,3662) Bot-right=(288,334)
+        px = pointer_framework.remap(y, 334, 3671, 0, self._orig_width)
+        py = pointer_framework.remap(x, 288, 3830, 0, self._orig_height)
         return px, py'''
 
 assert old in content, "Patron no encontrado - verificar version del repo"
@@ -164,7 +166,7 @@ python -m esptool \
 from micropython import const
 import machine, lcd_bus, lvgl as lv, task_handler, ili9341
 
-_DISPLAY_ROT = const(0xE0)  # MADCTL landscape para CYD
+_DISPLAY_ROT = const(0x20)  # landscape USB a la derecha
 
 spi_bus = machine.SPI.Bus(host=1, mosi=13, miso=12, sck=14)
 display_bus = lcd_bus.SPIBus(spi_bus=spi_bus, freq=24000000, dc=2, cs=15)
@@ -192,6 +194,15 @@ import xpt2046
 indev = xpt2046.XPT2046(device=indev_device)
 task_handler.TaskHandler()
 ```
+
+### Tabla de valores MADCTL según orientación
+
+| Orientación | MADCTL | USB |
+|-------------|--------|-----|
+| Landscape USB izquierda | `0xE0` | izquierda |
+| Landscape USB derecha | `0x20` | derecha (posición estándar) |
+| Portrait | `0x40` | arriba |
+| Portrait invertido | `0x80` | abajo |
 
 ---
 
@@ -225,6 +236,154 @@ Para soportar múltiples boards (2.8", 3.5", 4.3") sin hardcodear valores:
 4. En cada `main.py` pasar los valores específicos del board
 
 Esto permite un solo firmware genérico y configuración por software.
+
+---
+
+## 9. Touch paramétrico para múltiples boards
+
+En lugar de hardcodear los rangos raw en el firmware, se puede modificar el driver
+`xpt2046.py` para aceptar parámetros en el constructor. Esto permite usar un solo
+firmware para todos tus boards y configurar el touch desde el `main.py`.
+
+### 9.1 Modificar xpt2046.py
+
+Editar `api_drivers/common_api_drivers/indev/xpt2046.py`:
+
+**Paso 1 — Agregar parámetros al `__init__`:**
+
+```python
+def __init__(
+    self,
+    device,
+    touch_cal=None,
+    startup_rotation=pointer_framework.lv.DISPLAY_ROTATION._0,
+    debug=False,
+    # Nuevos parametros para calibracion por board
+    x_min=10,       # valor raw minimo del eje X fisico
+    x_max=4090,     # valor raw maximo del eje X fisico
+    y_min=10,       # valor raw minimo del eje Y fisico
+    y_max=4090,     # valor raw maximo del eje Y fisico
+    swap_xy=False,  # True si los ejes X/Y estan intercambiados
+    invert_x=False, # True si el eje X esta invertido
+    invert_y=False, # True si el eje Y esta invertido
+):
+    self._x_min = x_min
+    self._x_max = x_max
+    self._y_min = y_min
+    self._y_max = y_max
+    self._swap_xy = swap_xy
+    self._invert_x = invert_x
+    self._invert_y = invert_y
+    # ... resto del __init__ sin cambios
+```
+
+**Paso 2 — Reemplazar `_normalize`:**
+
+```python
+def _normalize(self, x, y):
+    # Intercambiar ejes si es necesario
+    if self._swap_xy:
+        x, y = y, x
+        x_min, x_max = self._y_min, self._y_max
+        y_min, y_max = self._x_min, self._x_max
+    else:
+        x_min, x_max = self._x_min, self._x_max
+        y_min, y_max = self._y_min, self._y_max
+
+    # Mapear a coordenadas de pantalla (con o sin inversion)
+    if self._invert_x:
+        px = pointer_framework.remap(x, x_max, x_min, 0, self._orig_width)
+    else:
+        px = pointer_framework.remap(x, x_min, x_max, 0, self._orig_width)
+
+    if self._invert_y:
+        py = pointer_framework.remap(y, y_max, y_min, 0, self._orig_height)
+    else:
+        py = pointer_framework.remap(y, y_min, y_max, 0, self._orig_height)
+
+    return px, py
+```
+
+### 9.2 Cómo medir los valores raw de tu board
+
+Antes de configurar un board nuevo, medir los valores raw del touch tocando
+las 4 esquinas con este script:
+
+```python
+# raw_measure.py - subir al ESP32 y tocar las 4 esquinas
+import machine, lcd_bus, lvgl as lv, task_handler, ili9341
+
+# ... inicializar display ...
+
+cs_pin = machine.Pin(33, machine.Pin.OUT)
+touch_spi = machine.SPI.Bus(host=2, mosi=32, miso=39, sck=25)
+touch_dev_raw = machine.SPI.Device(spi_bus=touch_spi, freq=1000000, cs=33)
+
+def read_raw(cmd):
+    buf = bytearray(3)
+    buf[0] = cmd
+    out = bytearray(3)
+    touch_dev_raw.write_readinto(buf, out)
+    return ((out[1] << 8) | out[2]) >> 3
+
+# Usar un timer para mostrar valores en pantalla mientras se toca
+lbl = lv.label(lv.screen_active())
+lbl.center()
+
+def timer_cb(t):
+    x = read_raw(0xD0)  # X raw
+    y = read_raw(0x90)  # Y raw
+    z = read_raw(0xB0)  # presion
+    if z > 100:
+        lbl.set_text("X={} Y={} Z={}".format(x, y, z))
+
+lv.timer_create(timer_cb, 200, None)
+task_handler.TaskHandler()
+```
+
+Anotar los valores en cada esquina:
+
+| Esquina | X_raw | Y_raw |
+|---------|-------|-------|
+| Top-left | ? | ? |
+| Top-right | ? | ? |
+| Bot-left | ? | ? |
+| Bot-right | ? | ? |
+
+### 9.3 Configuración por board en main.py
+
+Con el driver paramétrico, cada board se configura así:
+
+```python
+import xpt2046
+
+# ESP32-2432S028R (CYD 2.8") - USB a la derecha - MADCTL 0x20
+indev = xpt2046.XPT2046(
+    device=indev_device,
+    x_min=288,    # Bot-right X_raw
+    x_max=3830,   # Top-left X_raw
+    y_min=334,    # Bot-right Y_raw
+    y_max=3671,   # Top-left Y_raw
+    swap_xy=True, # ejes intercambiados en este board
+    invert_x=True,
+    invert_y=True,
+)
+
+# ESP32-3248S035R (CYD 3.5") - valores a medir con raw_measure.py
+indev = xpt2046.XPT2046(
+    device=indev_device,
+    x_min=300,
+    x_max=3800,
+    y_min=300,
+    y_max=3800,
+    swap_xy=False,  # ajustar segun medicion
+    invert_x=False,
+    invert_y=False,
+)
+```
+
+> **Nota:** El board de 4.3" (ESP32-8048S043) usa touch capacitivo GT911,
+> no XPT2046. Requiere un driver diferente.
 
 ---
 

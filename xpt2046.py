@@ -102,12 +102,10 @@ class XPT2046(pointer_framework.PointerDriver):
         return None
 
     def _normalize(self, x, y):
-        # CYD ESP32-2432S028R valores raw medidos exactos:
-        # Top-left raw=(3830,3671) -> pantalla (0,0)
-        # Bot-right raw=(288,334)  -> pantalla (319,239)
-        # X_raw -> Y_pantalla (0-239), Y_raw -> X_pantalla (0-319)
-        px = pointer_framework.remap(y, 3671, 334, 0, self._orig_width)
-        py = pointer_framework.remap(x, 3830, 288, 0, self._orig_height)
+        # CYD ESP32-2432S028R MADCTL 0x20 (USB a la derecha)
+        # Ejes intercambiados E invertidos
+        px = pointer_framework.remap(y, 334, 3671, 0, self._orig_width)
+        py = pointer_framework.remap(x, 288, 3830, 0, self._orig_height)
         return px, py
 
     def _get_raw(self):
