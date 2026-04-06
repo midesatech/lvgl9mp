@@ -7,6 +7,7 @@ class CounterService:
 
     def increment(self):
         self._count += 1
+        print("[CounterService] Click #{} registrado".format(self._count))
 
     def reset(self):
         self._count = 0

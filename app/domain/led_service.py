@@ -10,6 +10,7 @@ class LedService:
 
     def change_color(self, color_name: str):
         self._led.set_color(color_name)
+        print("[LedService] Color cambiado a: {}".format(color_name))
 
     def get_current_color(self) -> str:
         return self._led.current_color
