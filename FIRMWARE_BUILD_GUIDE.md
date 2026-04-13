@@ -1,14 +1,39 @@
 # Guía de Compilación: LVGL9 + MicroPython para ESP32-2432S028R (CYD)
 
+> **IMPORTANTE**: Esta guía es específica para el board **ESP32-2432S028R**
+> (Cheap Yellow Display 2.8"). Otros boards CYD (3.5", 4.3") requieren
+> configuración diferente.
+
 ## Resumen
 
-Guía completa para compilar el firmware `lvgl_micropython` en **Linux o macOS** para el board
-**ESP32-2432S028R** (Cheap Yellow Display), incluyendo el fix del touch XPT2046 y el bug fix
-del PR #454 del `pointer_framework`.
+Guía completa para compilar el firmware `lvgl_micropython` en **Linux o macOS**,
+incluyendo dos patches críticos para el touch XPT2046:
+
+1. **Fix XPT2046 `_normalize`** — calibración de ejes para el CYD
+2. **Fix PR #454 `pointer_framework`** — bug en transformación affine del touch
+
+Sin estos patches el touch no funciona correctamente en MicroPython, aunque
+en Arduino/C sí funciona porque las librerías C manejan la calibración internamente.
 
 ---
 
-## Requisitos del sistema
+## Repositorio base
+
+El firmware se compila desde:
+```
+https://github.com/lvgl-micropython/lvgl_micropython
+```
+
+Este es el repositorio **original** que usamos. El commit estable probado
+para el ESP32-2432S028R es `15a414b`.
+
+> **Nota**: El repo `de-dh/ESP32-Cheap-Yellow-Display-Micropython-LVGL` tiene
+> un firmware precompilado alternativo que también incluye el fix PR#454.
+> Sin embargo, compilar desde el repo original da más control sobre los patches.
+
+---
+
+## 1. Requisitos del sistema
 
 ### Linux (Ubuntu 22.04 / Debian)
 ```bash
@@ -22,18 +47,20 @@ sudo apt-get install -y \
 
 ### macOS
 ```bash
+# Instalar Homebrew si no está disponible: https://brew.sh
 brew install cmake ninja python3 git wget
-pip3 install esptool
+pip3 install esptool mpremote
 ```
 
 > En macOS el puerto serie será `/dev/cu.usbserial-XXXX` en lugar de `/dev/ttyUSB0`.
+> Usar `ls /dev/cu.*` para encontrar el puerto correcto.
 
 ---
 
-## 1. Clonar el repositorio
+## 2. Clonar el repositorio
 
-> **Importante:** No usar `--recursive` ni `git submodule init`. El script `make.py` gestiona
-> los submódulos automáticamente.
+> **Importante:** No usar `--recursive` ni `git submodule init`.
+> El script `make.py` gestiona los submódulos automáticamente.
 
 ```bash
 git clone https://github.com/lvgl-micropython/lvgl_micropython
@@ -41,15 +68,12 @@ cd lvgl_micropython
 git checkout 15a414b
 ```
 
-> El commit `15a414b` es el último estable probado con el ESP32-2432S028R.
-> La rama `main` también funciona pero puede tener cambios no probados.
-
 ---
 
-## 2. Aplicar el fix del touch XPT2046
+## 3. Patch 1: Fix XPT2046 `_normalize` para el CYD
 
-El XPT2046 del CYD tiene los ejes X/Y intercambiados respecto al display.
-Hay que parchear `_normalize` en el driver:
+El XPT2046 del ESP32-2432S028R tiene los ejes X/Y intercambiados respecto
+al display. El driver genérico no lo sabe — hay que parchear `_normalize`.
 
 ```bash
 cat > /tmp/patch_xpt.py << 'EOF'
@@ -61,7 +85,8 @@ with open(path, 'r') as f:
 
 old = r'    def _normalize\(self, x, y\):.*?return px, py'
 new = '''    def _normalize(self, x, y):
-        # ESP32-2432S028R (CYD) MADCTL 0x20 - USB a la derecha
+        # ESP32-2432S028R (CYD 2.8") MADCTL 0x20 - USB a la derecha
+        # Ejes intercambiados: X fisico = vertical, Y fisico = horizontal
         # Valores medidos con lapiz resistivo:
         # TL=(x~570,y~564) TR=(x~450,y~3505) BL=(x~3432,y~620) BR=(x~3632,y~3473)
         px = pointer_framework.remap(y, 371, 3335, 0, self._orig_width)
@@ -69,50 +94,56 @@ new = '''    def _normalize(self, x, y):
         return px, py'''
 
 result = re.sub(old, new, content, flags=re.DOTALL)
-assert result != content, "Patron no encontrado"
+assert result != content, "Patron no encontrado - verificar version del repo"
 with open(path, 'w') as f:
     f.write(result)
-print('XPT2046 patch OK')
+print('Patch XPT2046 OK')
 EOF
 python3 /tmp/patch_xpt.py
 ```
 
 ---
 
-## 3. Aplicar el bug fix PR #454 del pointer_framework
+## 4. Patch 2: Fix PR #454 `pointer_framework`
 
-Este es el fix más importante. Corrige un bug en el cálculo de la transformación
-affine del touch que causaba coordenadas incorrectas:
+Bug crítico en el cálculo de la transformación affine del touch. Sin este fix,
+la calibración interactiva no funciona correctamente.
 
+**El bug** (líneas ~83-84 del archivo original):
+```python
+# BUG: x ya modificado se usa para calcular y
+x = int(round(x * cal.alphaX + y * cal.betaX + cal.deltaX))
+y = int(round(x * cal.alphaY + y * cal.betaY + cal.deltaY))  # x incorrecto!
+```
+
+**Aplicar el fix:**
 ```bash
 cat > /tmp/patch_pf.py << 'EOF'
 path = 'api_drivers/py_api_drivers/frozen/indev/pointer_framework.py'
 with open(path, 'r') as f:
     content = f.read()
 
-# Bug: x ya modificado se usaba para calcular y
-old = '''            x = int(round(x * cal.alphaX + y * cal.betaX + cal.deltaX))
-            y = int(round(x * cal.alphaY + y * cal.betaY + cal.deltaY))'''
+old = ('            x = int(round(x * cal.alphaX + y * cal.betaX + cal.deltaX))\n'
+       '            y = int(round(x * cal.alphaY + y * cal.betaY + cal.deltaY))')
 
-# Fix: guardar x e y originales antes de modificarlos
-new = '''            # Fix PR#454: usar x e y originales para ambos calculos
-            x_orig = x
-            y_orig = y
-            x = int(round(x_orig * cal.alphaX + y_orig * cal.betaX + cal.deltaX))
-            y = int(round(x_orig * cal.alphaY + y_orig * cal.betaY + cal.deltaY))'''
+new = ('            # Fix PR#454: usar x e y originales para ambos calculos\n'
+       '            x_orig = x\n'
+       '            y_orig = y\n'
+       '            x = int(round(x_orig * cal.alphaX + y_orig * cal.betaX + cal.deltaX))\n'
+       '            y = int(round(x_orig * cal.alphaY + y_orig * cal.betaY + cal.deltaY))')
 
 assert old in content, "Patron no encontrado - verificar version del repo"
 content = content.replace(old, new)
 with open(path, 'w') as f:
     f.write(content)
-print('pointer_framework PR#454 fix OK')
+print('Patch pointer_framework PR#454 OK')
 EOF
 python3 /tmp/patch_pf.py
 ```
 
 ---
 
-## 4. Compilar el firmware
+## 5. Compilar el firmware
 
 ```bash
 python3 make.py esp32 \
@@ -132,7 +163,7 @@ build/lvgl_micropy_ESP32_GENERIC-4.bin
 
 ---
 
-## 5. Flashear el firmware
+## 6. Flashear el firmware
 
 ### Instalar esptool
 ```bash
@@ -144,6 +175,7 @@ El ESP32 debe estar en modo bootloader para flashear:
 1. Mantener presionado el botón **BOOT** (GPIO0)
 2. Presionar y soltar **RESET** (EN)
 3. Soltar **BOOT**
+4. Ejecutar el comando de flash inmediatamente
 
 ### Flashear
 ```bash
@@ -154,7 +186,7 @@ python3 -m esptool --chip esp32 --port /dev/ttyUSB0 \
     --flash-freq 40m --erase-all 0x0 \
     build/lvgl_micropy_ESP32_GENERIC-4.bin
 
-# macOS
+# macOS (reemplazar XXXX con tu puerto)
 python3 -m esptool --chip esp32 --port /dev/cu.usbserial-XXXX \
     -b 460800 --before default-reset --after hard-reset \
     write-flash --flash-mode dio --flash-size 4MB \
@@ -166,21 +198,21 @@ python3 -m esptool --chip esp32 --port /dev/cu.usbserial-XXXX \
 
 ---
 
-## 6. Subir archivos de la app
+## 7. Subir archivos de la app
 
-Instalar mpremote:
 ```bash
+# Instalar mpremote
 pip3 install mpremote
-```
 
-Crear directorios y subir archivos:
-```bash
+# Reemplazar PORT con tu puerto (/dev/ttyUSB0 o /dev/cu.usbserial-XXXX)
+PORT=/dev/ttyUSB0
+
 # Crear estructura de directorios
-python3 -m mpremote connect /dev/ttyUSB0 exec \
+python3 -m mpremote connect $PORT exec \
     "import os; [os.mkdir(d) for d in ['app','app/ports','app/domain','app/ui']]"
 
 # Subir todos los archivos
-python3 -m mpremote connect /dev/ttyUSB0 \
+python3 -m mpremote connect $PORT \
     cp app/__init__.py :app/__init__.py \
     + cp app/ports/display_port.py :app/ports/display_port.py \
     + cp app/ports/led_port.py :app/ports/led_port.py \
@@ -194,7 +226,73 @@ python3 -m mpremote connect /dev/ttyUSB0 \
 
 ---
 
-## 7. Configuración del display
+## 8. Calibración del touch XPT2046
+
+### Por qué es necesario
+
+El touch resistivo XPT2046 del CYD no es lineal. El remap lineal del Patch 1
+da una aproximación, pero la calibración affine por 3 puntos da precisión
+comparable a Arduino/C.
+
+### Calibración interactiva (recomendada)
+
+```bash
+# 1. Subir script de calibración
+python3 -m mpremote connect $PORT cp calibrate_touch.py :main.py
+python3 -m mpremote connect $PORT reset
+
+# 2. Seguir instrucciones en pantalla:
+#    - Aparece un círculo rojo en 3 posiciones
+#    - Presionar y mantener el lápiz sobre cada círculo
+#    - El sistema captura 8 muestras por punto
+#    - La calibración se guarda automáticamente en NVS
+
+# 3. Restaurar app original
+python3 -m mpremote connect $PORT cp main.py :main.py
+python3 -m mpremote connect $PORT reset
+```
+
+### Coeficientes de calibración del ESP32-2432S028R (referencia)
+
+Estos coeficientes fueron medidos en un board específico. Pueden variar
+entre unidades pero sirven como punto de partida:
+
+```
+alphaX=1.39742   betaX=0.1696867  deltaX=-63.0
+alphaY=0.1105651 betaY=1.29914    deltaY=-48.44595
+mirrorX=False    mirrorY=False
+Namespace NVS: XPT2046_2
+```
+
+### Restaurar calibración manualmente
+
+Si se pierde la calibración (por flash con --erase-all), restaurar con:
+
+```bash
+python3 -m mpremote connect $PORT exec "
+from touch_cal_data import TouchCalData
+c = TouchCalData('XPT2046_2')
+c.alphaX = 1.39742
+c.betaX = 0.1696867
+c.deltaX = -63.0
+c.alphaY = 0.1105651
+c.betaY = 1.29914
+c.deltaY = -48.44595
+c.mirrorX = False
+c.mirrorY = False
+c._is_dirty = True
+c.save()
+print('Calibracion restaurada OK')
+"
+```
+
+> **Nota**: El namespace NVS (`XPT2046_2`) depende del ID del indev.
+> Verificar con: `python3 -m mpremote connect $PORT exec "import xpt2046, machine; ..."`
+> Si el ID es diferente, ajustar el namespace.
+
+---
+
+## 9. Configuración del display
 
 ```python
 from micropython import const
@@ -237,7 +335,7 @@ task_handler.TaskHandler()
 
 ---
 
-## 8. Pinout del ESP32-2432S028R
+## 10. Pinout del ESP32-2432S028R
 
 | Función | GPIO |
 |---------|------|
@@ -263,148 +361,68 @@ task_handler.TaskHandler()
 
 ---
 
-## 9. Calibración del touch XPT2046
+## 11. Notas técnicas sobre los patches
 
-### Valores de calibración (ESP32-2432S028R, USB derecha)
+### Por qué estos patches no están en el repo original
 
-```python
-# En xpt2046.py - _normalize para MADCTL 0x20
-# Valores medidos con lápiz resistivo del kit
-px = pointer_framework.remap(y, 371, 3335, 0, self._orig_width)
-py = pointer_framework.remap(x, 600, 3371, 0, self._orig_height)
-```
+- **Patch XPT2046**: Los valores de calibración son específicos de cada board.
+  El repo original usa valores genéricos (0-4090) que no funcionan con el CYD.
 
-### Valores raw medidos en las esquinas
+- **Patch PR#454**: Es un bug reportado y corregido en el PR #454 del repo
+  `lvgl-micropython/lvgl_micropython`. Al momento de compilar con commit
+  `15a414b`, este fix no estaba mergeado. Verificar si ya está incluido en
+  versiones más recientes antes de aplicarlo manualmente:
+  ```bash
+  grep -n "x_orig" api_drivers/py_api_drivers/frozen/indev/pointer_framework.py
+  # Si retorna resultados, el fix ya está incluido
+  ```
 
-| Esquina | X_raw | Y_raw |
-|---------|-------|-------|
-| Top-left | ~570 | ~564 |
-| Top-right | ~450 | ~3505 |
-| Bot-left | ~3432 | ~620 |
-| Bot-right | ~3632 | ~3473 |
-| Centro | ~2066 | ~1947 |
+### Aplicar patches a versiones más recientes del repo
 
-> **Nota:** Y físico = eje horizontal de pantalla. X físico = eje vertical.
-> Los ejes están intercambiados respecto al display.
+Si usas un commit más reciente que `15a414b`:
 
-### Cómo medir los valores raw de tu board
+1. Verificar si PR#454 ya está mergeado (ver comando arriba)
+2. Los valores de `_normalize` del Patch 1 son específicos del CYD 2.8"
+   y deben aplicarse siempre independientemente de la versión
 
-```python
-# raw_measure.py - subir al ESP32 y tocar las 4 esquinas
-# Ver archivo raw_measure.py en el repositorio
-```
+### Persistencia de los patches
 
-### Calibración affine interactiva (opcional)
+Los archivos en el filesystem del ESP32 tienen **prioridad** sobre los
+módulos frozen del firmware:
 
-El firmware soporta calibración affine por 3 puntos que se guarda en NVS:
+| Archivo | Ubicación recomendada |
+|---------|----------------------|
+| `xpt2046.py` | Baked in firmware (Patch 1 aplicado antes de compilar) |
+| `pointer_framework.py` | Baked in firmware (Patch 2 aplicado antes de compilar) |
 
-```python
-# En main.py, después de init_hardware():
-display, indev = init_hardware()
-if not indev.is_calibrated:
-    indev.calibrate()   # muestra UI de calibración en pantalla
-    indev._cal.save()   # guarda en NVS del ESP32
-```
-
-La calibración se guarda permanentemente y no se pierde al reiniciar.
-
----
-
-## 10. Bug fix PR #454 — pointer_framework
-
-### El problema
-
-El `pointer_framework.py` del firmware base tiene un bug en el cálculo
-de la transformación affine del touch:
-
-```python
-# BUG: x ya modificado se usa para calcular y
-x = int(round(x * cal.alphaX + y * cal.betaX + cal.deltaX))
-y = int(round(x * cal.alphaY + y * cal.betaY + cal.deltaY))  # x incorrecto!
-```
-
-### El fix
-
-```python
-# FIX: usar x e y originales para ambos cálculos
-x_orig = x
-y_orig = y
-x = int(round(x_orig * cal.alphaX + y_orig * cal.betaX + cal.deltaX))
-y = int(round(x_orig * cal.alphaY + y_orig * cal.betaY + cal.deltaY))
-```
-
-### Aplicar sin recompilar
-
-Subir `pointer_framework.py` al filesystem del ESP32 (tiene prioridad sobre el frozen):
-
-```bash
-python3 -m mpremote connect /dev/ttyUSB0 cp pointer_framework.py :pointer_framework.py
-python3 -m mpremote connect /dev/ttyUSB0 reset
-```
-
-El archivo `pointer_framework.py` con el fix está en el repositorio.
-
----
-
-## 11. Persistencia de los patches
-
-Los archivos en el filesystem del ESP32 tienen **prioridad** sobre los módulos
-frozen del firmware. Esto significa:
-
-| Archivo | Ubicación | Prioridad |
-|---------|-----------|-----------|
-| `xpt2046.py` | filesystem `/` | Alta — sobreescribe frozen |
-| `pointer_framework.py` | filesystem `/` | Alta — sobreescribe frozen |
-| Módulos frozen | firmware | Baja — solo si no hay en filesystem |
-
-**Flujo recomendado después de cada flash:**
-
-```bash
-# 1. Crear directorios
-python3 -m mpremote connect PORT exec \
-    "import os; [os.mkdir(d) for d in ['app','app/ports','app/domain','app/ui']]"
-
-# 2. Subir app + patches críticos
-python3 -m mpremote connect PORT \
-    cp pointer_framework.py :pointer_framework.py \
-    + cp xpt2046.py :xpt2046.py \
-    + cp app/__init__.py :app/__init__.py \
-    + cp app/ports/display_port.py :app/ports/display_port.py \
-    + cp app/ports/led_port.py :app/ports/led_port.py \
-    + cp app/domain/counter_service.py :app/domain/counter_service.py \
-    + cp app/domain/led_service.py :app/domain/led_service.py \
-    + cp app/ui/components.py :app/ui/components.py \
-    + cp app/ui/screens.py :app/ui/screens.py \
-    + cp main.py :main.py \
-    + reset
-```
+Si se compila con ambos patches, no es necesario subir estos archivos
+al filesystem después de cada flash.
 
 ---
 
 ## 12. Notas sobre el touch resistivo
 
-El XPT2046 resistivo del CYD tiene limitaciones físicas:
-
 - **Área muerta en bordes**: ~5-10% en cada borde no responde al touch
-- **No linealidad**: el touch no es perfectamente lineal — un remap lineal
-  es una aproximación. La calibración affine (sección 9) da mejor resultado
-- **Diferencia lápiz/dedo**: el lápiz resistivo requiere más presión que el dedo
+- **No linealidad**: el remap lineal es una aproximación; la calibración
+  affine da mejor resultado
+- **Diferencia lápiz/dedo**: el lápiz resistivo requiere más presión
 - **Comparación con Arduino**: en Arduino/C la librería `XPT2046_Touchscreen`
-  usa `setRotation()` que aplica transformación interna. En MicroPython hay
-  que hacer la transformación manualmente en `_normalize`
+  con `setRotation()` maneja la calibración internamente. En MicroPython
+  hay que hacerlo manualmente con los patches descritos en esta guía.
 
 ### Compensar área muerta con ext_click_area
 
 ```python
-btn.set_ext_click_area(15)  # 15px extra en todos los lados
+btn.set_ext_click_area(10)  # 10px extra en todos los lados
 ```
 
 ---
 
 ## 13. Recursos y referencias
 
-- [lvgl_micropython](https://github.com/lvgl-micropython/lvgl_micropython) — Bindings oficiales
-- [ESP32-CYD MicroPython LVGL](https://github.com/de-dh/ESP32-Cheap-Yellow-Display-Micropython-LVGL) — Repo con firmware precompilado y calibración
-- [PR #454 bug fix](https://github.com/lvgl-micropython/lvgl_micropython/issues/454) — Fix del pointer_framework
+- [lvgl_micropython](https://github.com/lvgl-micropython/lvgl_micropython) — Repo original usado
+- [PR #454 bug fix](https://github.com/lvgl-micropython/lvgl_micropython/pull/454) — Fix pointer_framework
+- [ESP32-CYD MicroPython LVGL](https://github.com/de-dh/ESP32-Cheap-Yellow-Display-Micropython-LVGL) — Firmware alternativo precompilado
 - [ESP32-Cheap-Yellow-Display](https://github.com/witnessmenow/ESP32-Cheap-Yellow-Display) — Repo oficial CYD con ejemplos Arduino
 - [LVGL 9 Docs](https://docs.lvgl.io/master/) — Documentación oficial LVGL
+- [LVGL 8.3 Docs con ejemplos MicroPython](https://docs.lvgl.io/8.3/) — Mayoría de ejemplos MicroPython están aquí
