@@ -33,6 +33,7 @@ def build_button_screen(manager: ScreenManager, counter: CounterService) -> lv.o
     btn = lv.button(s)
     btn.set_size(120, 40)
     btn.set_pos(10, y + 25)
+    btn.set_ext_click_area(15)  # compensar area muerta borde derecho
     bl = lv.label(btn)
     bl.set_text("Click me!")
     bl.center()
@@ -51,7 +52,7 @@ def build_button_screen(manager: ScreenManager, counter: CounterService) -> lv.o
 
     cb2 = lv.checkbox(s)
     cb2.set_text("Option B")
-    cb2.set_pos(10, y + 105)
+    cb2.set_pos(10, y + 115)  # mas separado de A para evitar activacion cruzada
     cb2.set_style_text_color(lv.color_hex(0xFFFFFF), 0)
     cb2.add_state(lv.STATE.CHECKED)
 
