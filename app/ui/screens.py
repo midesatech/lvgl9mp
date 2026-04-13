@@ -197,7 +197,7 @@ def build_led_screen(manager: ScreenManager, led_service: LedService) -> lv.obj:
     s = dark_screen()
     y = nav_bar(s, "RGB LED", manager.next)
 
-    status_lbl = white_label(s, "LED: OFF", 10, y + 5)
+    status_lbl = white_label(s, "LED: OFF", 10, y + 2)
 
     COLOR_HEX = {
         "OFF": 0x555555, "ROJO": 0xFF0000, "VERDE": 0x00FF00,
@@ -205,15 +205,32 @@ def build_led_screen(manager: ScreenManager, led_service: LedService) -> lv.obj:
         "MAGENTA": 0xFF00FF, "AMARILLO": 0xFFFF00,
     }
 
+    # 2 columnas, 4 filas - botones grandes que ocupan toda la pantalla
+    # Pantalla: 320x240, nav_bar=35px, status=20px -> disponible ~185px alto
+    # 2 cols: ancho = (320 - 30) / 2 = 145px, margen 20px entre cols
+    # 4 filas: alto = 185 / 4 = 46px por boton
+    BTN_W = 145
+    BTN_H = 43
+    COL_GAP = 20   # espacio entre columnas
+    ROW_GAP = 4    # espacio entre filas
+    START_X = 5
+    START_Y = y + 22
+
     for i, name in enumerate(led_service.available_colors()):
+        col = i % 2
+        row = i // 2
+        bx = START_X + col * (BTN_W + COL_GAP)
+        by = START_Y + row * (BTN_H + ROW_GAP)
+
         btn = lv.button(s)
-        btn.set_size(70, 45)
-        btn.set_pos(10 + (i % 4) * 76, y + 30 + (i // 4) * 52)
+        btn.set_size(BTN_W, BTN_H)
+        btn.set_pos(bx, by)
         btn.set_style_bg_color(lv.color_hex(COLOR_HEX.get(name, 0x555555)), 0)
-        btn.set_ext_click_area(12)  # compensar area muerta del touch
+        btn.set_style_radius(6, 0)
         bl = lv.label(btn)
         bl.set_text(name)
-        bl.set_style_text_color(lv.color_hex(0x000000 if name != "OFF" else 0xFFFFFF), 0)
+        bl.set_style_text_color(lv.color_hex(0x000000 if name not in ("OFF", "AZUL", "MAGENTA") else 0xFFFFFF), 0)
+        bl.set_style_text_font(lv.font_montserrat_16, 0)
         bl.center()
 
         def make_cb(n=name):
