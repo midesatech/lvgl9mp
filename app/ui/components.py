@@ -10,6 +10,8 @@ def nav_bar(screen, title: str, on_next) -> int:
     bar.set_style_bg_color(lv.color_hex(0x2196F3), 0)
     bar.set_style_border_width(0, 0)
     bar.set_style_radius(0, 0)
+    bar.set_scrollbar_mode(lv.SCROLLBAR_MODE.OFF)
+    bar.set_scroll_dir(lv.DIR.NONE)
 
     t = lv.label(bar)
     t.set_text(title)
@@ -39,4 +41,6 @@ def white_label(parent, text: str, x: int, y: int) -> lv.label:
 def dark_screen() -> lv.obj:
     s = lv.obj()
     s.set_style_bg_color(lv.color_hex(0x1a1a2e), 0)
+    s.set_scrollbar_mode(lv.SCROLLBAR_MODE.OFF)
+    s.set_scroll_dir(lv.DIR.NONE)
     return s

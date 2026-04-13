@@ -103,10 +103,13 @@ class XPT2046(pointer_framework.PointerDriver):
 
     def _normalize(self, x, y):
         # CYD ESP32-2432S028R MADCTL 0x20 (USB a la derecha)
-        # Valores medidos con lapiz resistivo - mejor cobertura ~98%
-        # TL=(~600,~510) TR=(~630,~3335) BL=(~3371,~532) BR=(~3030,~3117)
-        px = pointer_framework.remap(y, 334, 3671, 0, self._orig_width)
-        py = pointer_framework.remap(x, 288, 3830, 0, self._orig_height)
+        # Valores medidos tocando esquinas fisicas:
+        # TL=(x~570, y~564)  TR=(x~450, y~3505)
+        # BL=(x~3432,y~620)  BR=(x~3632,y~3473)  Centro=(x~2066,y~1947)
+        # Y fisico = eje horizontal (izq~564, der~3505)
+        # X fisico = eje vertical   (arriba~450, abajo~3632)
+        px = pointer_framework.remap(y, 564, 3505, 0, self._orig_width)
+        py = pointer_framework.remap(x, 450, 3632, 0, self._orig_height)
         return px, py
 
     def _get_raw(self):
