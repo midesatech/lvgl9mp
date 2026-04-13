@@ -103,8 +103,7 @@ class XPT2046(pointer_framework.PointerDriver):
 
     def _normalize(self, x, y):
         # CYD ESP32-2432S028R MADCTL 0x20 (USB a la derecha)
-        # Mejor resultado historico: slider hasta 62, Next funcionaba
-        # Commit 7cb1075 - valores medidos con lapiz resistivo
+        # Mejor resultado historico (commit 7cb1075): Next OK, slider ~62
         px = pointer_framework.remap(y, 371, 3335, 0, self._orig_width)
         py = pointer_framework.remap(x, 600, 3371, 0, self._orig_height)
         return px, py

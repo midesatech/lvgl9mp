@@ -74,6 +74,8 @@ def build_slider_screen(manager: ScreenManager) -> lv.obj:
 
     slider.add_event_cb(on_slider, lv.EVENT.VALUE_CHANGED, None)
 
+    slider.add_event_cb(on_slider, lv.EVENT.VALUE_CHANGED, None)
+
     sw = lv.switch(s)
     sw.set_pos(10, y + 45)
     sw_lbl = white_label(s, "OFF", 80, y + 48)
