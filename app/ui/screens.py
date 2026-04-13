@@ -40,6 +40,7 @@ def build_button_screen(manager: ScreenManager, counter: CounterService) -> lv.o
     def on_click(e):
         counter.increment()
         bl.set_text("Clicks: {}".format(counter.value))
+        print("[BTN] Clicks: {}".format(counter.value))
 
     btn.add_event_cb(on_click, lv.EVENT.CLICKED, None)
 
@@ -216,6 +217,7 @@ def build_led_screen(manager: ScreenManager, led_service: LedService) -> lv.obj:
             def cb(e):
                 led_service.change_color(n)
                 status_lbl.set_text("LED: " + led_service.get_current_color())
+                print("[LED] Color: {}".format(led_service.get_current_color()))
             return cb
 
         btn.add_event_cb(make_cb(), lv.EVENT.CLICKED, None)

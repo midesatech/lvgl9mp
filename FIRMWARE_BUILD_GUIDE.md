@@ -73,10 +73,11 @@ al valor genérico (10-4090). Los valores reales medidos son:
 
 | Esquina | X_raw | Y_raw |
 |---------|-------|-------|
-| Top-left | 3830 | 3671 |
-| Top-right | 3811 | 320 |
-| Bot-left | 258 | 3662 |
-| Bot-right | 288 | 334 |
+| Top-left | ~600 | ~510 |
+| Top-right | ~630 | ~3335 |
+| Bot-left | ~3371 | ~532 |
+| Bot-right | ~3030 | ~3117 |
+| Centro | ~2067 | ~1680 |
 
 Aplicar el patch:
 
@@ -98,7 +99,7 @@ old = '''    def _normalize(self, x, y):
 new = '''    def _normalize(self, x, y):
         # ESP32-2432S028R (CYD) MADCTL 0x20 - USB a la derecha
         # Ejes intercambiados e invertidos segun medicion raw:
-        # Top-left=(3830,3671) Top-right=(3811,320) Bot-left=(258,3662) Bot-right=(288,334)
+        # TL=(~600,~510) TR=(~630,~3335) BL=(~3371,~532) BR=(~3030,~3117)
         px = pointer_framework.remap(y, 334, 3671, 0, self._orig_width)
         py = pointer_framework.remap(x, 288, 3830, 0, self._orig_height)
         return px, py'''
@@ -358,12 +359,13 @@ Con el driver paramétrico, cada board se configura así:
 import xpt2046
 
 # ESP32-2432S028R (CYD 2.8") - USB a la derecha - MADCTL 0x20
+# Valores medidos: TL=(~600,~510) TR=(~630,~3335) BL=(~3371,~532) BR=(~3030,~3117)
 indev = xpt2046.XPT2046(
     device=indev_device,
-    x_min=288,    # Bot-right X_raw
-    x_max=3830,   # Top-left X_raw
-    y_min=334,    # Bot-right Y_raw
-    y_max=3671,   # Top-left Y_raw
+    x_min=288,    # X_raw minimo (lado izquierdo de pantalla)
+    x_max=3830,   # X_raw maximo (lado derecho de pantalla)
+    y_min=334,    # Y_raw minimo (parte superior de pantalla)
+    y_max=3671,   # Y_raw maximo (parte inferior de pantalla)
     swap_xy=True, # ejes intercambiados en este board
     invert_x=True,
     invert_y=True,
@@ -401,8 +403,9 @@ El archivo `xpt2046.py` es un módulo **frozen** dentro del firmware. Esto signi
 ```python
 # xpt2046.py - _normalize para MADCTL 0x20 (USB a la derecha)
 # Valores medidos con lápiz resistivo incluido en el kit
-px = pointer_framework.remap(y, 371, 3335, 0, self._orig_width)
-py = pointer_framework.remap(x, 600, 3371, 0, self._orig_height)
+# TL=(~600,~510)  TR=(~630,~3335)  BL=(~3371,~532)  BR=(~3030,~3117)
+px = pointer_framework.remap(y, 334, 3671, 0, self._orig_width)
+py = pointer_framework.remap(x, 288, 3830, 0, self._orig_height)
 ```
 
 ### Nota sobre área muerta del touch resistivo
