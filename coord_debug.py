@@ -1,7 +1,7 @@
 from micropython import const
 import machine, lcd_bus, lvgl as lv, task_handler, ili9341
 
-_DISPLAY_ROT = const(0xE0)
+_DISPLAY_ROT = const(0x20)  # USB a la derecha
 
 spi_bus = machine.SPI.Bus(host=1, mosi=13, miso=12, sck=14)
 indev_bus = machine.SPI.Bus(host=2, mosi=32, miso=39, sck=25)

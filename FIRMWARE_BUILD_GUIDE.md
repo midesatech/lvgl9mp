@@ -35,7 +35,7 @@ sudo apt-get install -y \
 > los submódulos automáticamente.
 
 ```bash
-git clone https://github.com/lvgl-micropython/lvgl_micropython
+git clone 1
 cd lvgl_micropython
 ```
 
@@ -387,7 +387,65 @@ indev = xpt2046.XPT2046(
 
 ---
 
-## 9. Agregar módulos C propios
+## 10. Nota importante: persistencia del patch
+
+El archivo `xpt2046.py` es un módulo **frozen** dentro del firmware. Esto significa:
+
+- Si compilás el firmware **con el patch aplicado**, el touch funciona correctamente
+  sin necesidad de subir ningún archivo extra al ESP32.
+- Si flasheás un firmware **sin el patch**, el touch quedará descuadrado y tendrás
+  que subir el `xpt2046.py` modificado al filesystem del ESP32.
+
+### Valores de calibración finales (ESP32-2432S028R con lápiz resistivo)
+
+```python
+# xpt2046.py - _normalize para MADCTL 0x20 (USB a la derecha)
+# Valores medidos con lápiz resistivo incluido en el kit
+px = pointer_framework.remap(y, 371, 3335, 0, self._orig_width)
+py = pointer_framework.remap(x, 600, 3371, 0, self._orig_height)
+```
+
+### Nota sobre área muerta del touch resistivo
+
+El XPT2046 tiene un área muerta física de ~5-8% en los bordes de la pantalla.
+Para compensarlo se usa `set_ext_click_area(12)` en los widgets:
+
+```python
+btn.set_ext_click_area(12)  # 12px extra en todos los lados
+```
+
+**Flujo recomendado para no perder el patch:**
+
+```bash
+# 1. Siempre copiar el xpt2046.py parchado antes de compilar
+cp xpt2046_cyd_patched.py \
+    ~/lvgl_micropython_build/lvgl_micropython/api_drivers/common_api_drivers/indev/xpt2046.py
+
+# 2. Compilar
+cd ~/lvgl_micropython_build/lvgl_micropython
+python3 make.py esp32 BOARD=ESP32_GENERIC DISPLAY=ili9341 INDEV=xpt2046 --flash-size=4
+
+# 3. Flashear
+python -m esptool --chip esp32 --port /dev/ttyUSB0 -b 460800 \
+    --before default-reset --after hard-reset write-flash \
+    --flash-mode dio --flash-size 4MB --flash-freq 40m \
+    --erase-all 0x0 build/lvgl_micropy_ESP32_GENERIC-4.bin
+
+# 4. Subir archivos de la app
+python -m mpremote connect /dev/ttyUSB0 \
+    mkdir :app + mkdir :app/ports + mkdir :app/domain + mkdir :app/ui \
+    + cp app/__init__.py :app/__init__.py \
+    + cp app/ports/display_port.py :app/ports/display_port.py \
+    + cp app/ports/led_port.py :app/ports/led_port.py \
+    + cp app/domain/counter_service.py :app/domain/counter_service.py \
+    + cp app/domain/led_service.py :app/domain/led_service.py \
+    + cp app/ui/components.py :app/ui/components.py \
+    + cp app/ui/screens.py :app/ui/screens.py \
+    + cp main.py :main.py \
+    + reset
+```
+
+---
 
 ```bash
 python3 make.py esp32 \

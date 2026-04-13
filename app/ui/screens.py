@@ -206,6 +206,7 @@ def build_led_screen(manager: ScreenManager, led_service: LedService) -> lv.obj:
         btn.set_size(70, 45)
         btn.set_pos(10 + (i % 4) * 76, y + 30 + (i // 4) * 52)
         btn.set_style_bg_color(lv.color_hex(COLOR_HEX.get(name, 0x555555)), 0)
+        btn.set_ext_click_area(12)  # compensar area muerta del touch
         bl = lv.label(btn)
         bl.set_text(name)
         bl.set_style_text_color(lv.color_hex(0x000000 if name != "OFF" else 0xFFFFFF), 0)

@@ -19,6 +19,7 @@ def nav_bar(screen, title: str, on_next) -> int:
     btn = lv.button(bar)
     btn.set_size(60, 22)
     btn.align(lv.ALIGN.RIGHT_MID, -3, 0)
+    btn.set_ext_click_area(10)
     btn.add_event_cb(lambda e: on_next(), lv.EVENT.CLICKED, None)
     btn_lbl = lv.label(btn)
     btn_lbl.set_text("Next >")
