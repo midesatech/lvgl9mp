@@ -17,9 +17,9 @@ _MAX_RAW_COORD = const(4090)
 
 class XPT2046(pointer_framework.PointerDriver):
 
-    touch_threshold = 400
-    confidence = 5
-    margin = 50
+    touch_threshold = 200  # bajado de 400 para mejor sensibilidad con lapiz
+    confidence = 3         # bajado de 5 para menos filtrado
+    margin = 100           # subido de 50 para mas tolerancia
 
     def _read_reg(self, reg, num_bytes):
         self._tx_buf[0] = reg
@@ -103,13 +103,10 @@ class XPT2046(pointer_framework.PointerDriver):
 
     def _normalize(self, x, y):
         # CYD ESP32-2432S028R MADCTL 0x20 (USB a la derecha)
-        # Valores medidos tocando esquinas fisicas:
-        # TL=(x~570, y~564)  TR=(x~450, y~3505)
-        # BL=(x~3432,y~620)  BR=(x~3632,y~3473)  Centro=(x~2066,y~1947)
-        # Y fisico = eje horizontal (izq~564, der~3505)
-        # X fisico = eje vertical   (arriba~450, abajo~3632)
-        px = pointer_framework.remap(y, 564, 3505, 0, self._orig_width)
-        py = pointer_framework.remap(x, 450, 3632, 0, self._orig_height)
+        # Slider llega a 9, Next solo con dedo, MAGENTA desde letra E
+        # -> y_min aun alto, bajar mas para cubrir lado izquierdo
+        px = pointer_framework.remap(y, 100, 3600, 0, self._orig_width)
+        py = pointer_framework.remap(x, 200, 3700, 0, self._orig_height)
         return px, py
 
     def _get_raw(self):

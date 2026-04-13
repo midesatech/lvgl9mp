@@ -1,30 +1,47 @@
 # Contexto para próxima sesión - ESP32-2432S028R (CYD)
 
-## Estado actual (2026-04-13)
+## Estado actual (2026-04-13 - fin de sesión)
 
 ### Lo que funciona
-- Firmware LVGL9 + MicroPython compilado y flasheado correctamente
-- Display ILI9341 se ve bien, orientación landscape USB a la derecha (MADCTL 0x20)
-- App de widgets se muestra: botones, slider, checkboxes, LED RGB, etc.
-- Scroll deshabilitado en pantallas (`set_scrollbar_mode OFF` + `set_scroll_dir NONE`)
+- Firmware LVGL9 + MicroPython flasheado y verificado (firmware.bin en workspace)
+- Display ILI9341 correcto: landscape, USB a la derecha, MADCTL 0x20
+- App de widgets visible: botones, slider, checkboxes, LED RGB
+- Scroll deshabilitado en todas las pantallas
 - Prints en consola al presionar botones de color y botón Clicks
 
-### Problema pendiente: Touch descuadrado
-El touch XPT2046 sigue sin funcionar correctamente:
-- El slider solo llega hasta ~6-7 con dedo o lápiz (debería llegar a 100)
-- Los botones responden pero en posición desplazada
+### Problema pendiente: Touch descuadrado (desplazado a la derecha)
 
-### Valores de calibración actuales en xpt2046.py (filesystem)
+#### Síntomas observados al final de sesión
+Con los valores `px = remap(y, 100, 3600)` y `py = remap(x, 200, 3700)`:
+1. Botón Next: responde con dedo pero NO con lápiz
+2. Slider: llega hasta ~9 (mejoró de 7 → 9 durante la sesión)
+3. Botón MAGENTA: solo responde desde la letra "E" hacia la derecha
+   → indica que el lado izquierdo de la pantalla sigue sin cobertura
+   → y_min aún demasiado alto
+
+#### Progresión de valores probados (de peor a mejor)
+```
+remap(y, 334, 3671) → remap(x, 288, 3830)  # original firmware frozen - malo
+remap(y, 371, 3335) → remap(x, 600, 3371)  # versión anterior - malo
+remap(y, 564, 3505) → remap(x, 450, 3632)  # basado en mediciones - slider a 7
+remap(y, 564, 3505) → remap(x, 200, 3700)  # ajuste vertical - slider a 9
+remap(y, 200, 3600) → remap(x, 200, 3700)  # slider a 9, MAGENTA desde E
+remap(y, 100, 3600) → remap(x, 200, 3700)  # ÚLTIMO - pendiente de prueba
+```
+
+#### Valores actuales en xpt2046.py (filesystem ESP32)
 ```python
+touch_threshold = 200  # bajado de 400
+confidence = 3         # bajado de 5
+margin = 100           # subido de 50
+
 def _normalize(self, x, y):
-    # Y fisico = eje horizontal (izq~564, der~3505)
-    # X fisico = eje vertical   (arriba~450, abajo~3632)
-    px = pointer_framework.remap(y, 564, 3505, 0, self._orig_width)
-    py = pointer_framework.remap(x, 450, 3632, 0, self._orig_height)
+    px = pointer_framework.remap(y, 100, 3600, 0, self._orig_width)
+    py = pointer_framework.remap(x, 200, 3700, 0, self._orig_height)
     return px, py
 ```
 
-### Valores raw medidos (del historial - confiables)
+### Valores raw medidos (confiables, del historial)
 Tomados con lápiz resistivo, USB a la derecha, MADCTL 0x20:
 ```
 TL (arriba-izq): x_raw~570,  y_raw~564
@@ -34,61 +51,74 @@ BR (abajo-der):  x_raw~3632, y_raw~3473
 Centro:          x_raw~2066, y_raw~1947
 ```
 
-### Análisis del problema
-1. Los ejes están intercambiados: X físico = movimiento vertical, Y físico = movimiento horizontal
-2. El mapeo actual parece correcto en dirección pero el slider solo llega a ~7%
-3. Posible causa: el rango Y (564-3505) cubre bien horizontal, pero el rango X (450-3632)
-   puede estar mal para vertical — el slider se mueve horizontalmente, así que usa Y físico
-4. El slider va de izquierda a derecha → usa Y físico → rango 564 a 3505 → debería funcionar
-5. PERO si el slider solo llega a 7, significa que Y físico máximo que se detecta es ~780
-   (7% de 3505-564 = ~205 unidades sobre 564 = ~769) → el touch no detecta más allá
+### Análisis del problema raíz
+- Y físico = eje horizontal pantalla (izquierda=bajo, derecha=alto)
+- X físico = eje vertical pantalla (arriba=bajo, abajo=alto)
+- El slider va de izquierda a derecha → controlado por Y físico
+- Si slider llega a 9% → Y físico máximo detectado ≈ 100 + 9%*(3600-100) = ~415
+  Pero el valor real de TL es y_raw~564 → confirma que y_min=100 es correcto
+  El problema es que el lápiz/dedo no genera suficiente presión en el borde izquierdo
 
-### Hipótesis principal
-El `touch_threshold = 400` puede estar filtrando toques válidos en la zona izquierda/derecha.
-O bien el `confidence = 5` con `margin = 50` descarta muestras inconsistentes del borde.
+### Hipótesis para próxima sesión
+1. **El touch resistivo tiene área muerta física en el borde izquierdo** (~10-15%)
+   → No hay solución de software, es limitación del hardware
+   → Compensar con set_ext_click_area más grande en widgets del borde izquierdo
 
-### Lo que hay que probar en la próxima sesión
+2. **El lápiz no genera suficiente presión** (threshold=200 puede ayudar)
+   → Ya bajado a 200, probar resultado
 
-#### Opción A: Bajar touch_threshold y ajustar confidence
-En xpt2046.py cambiar:
-```python
-touch_threshold = 200  # era 400
-confidence = 3         # era 5
-margin = 100           # era 50
-```
+3. **Los valores raw reales pueden ser diferentes** a los medidos
+   → Usar cal_measure.py para medir fresh con el firmware actual
 
-#### Opción B: Medir raw reales con cal_measure.py
-El script `cal_measure.py` está en el workspace. Subirlo como main.py temporal,
-tocar las 4 esquinas físicas del display y anotar los valores TP_DATA que aparecen.
-Esos son los valores raw REALES del ADC antes de normalizar.
+### Plan para próxima sesión
 
-#### Opción C: Recompilar firmware con valores correctos baked in
-Una vez encontrados los valores correctos, compilar en WSL2:
+#### Paso 1: Probar valores actuales (y=100-3600, x=200-3700, threshold=200)
+Ver si el slider llega más lejos y si Next responde con lápiz
+
+#### Paso 2: Si sigue mal, medir raw con cal_measure.py
 ```bash
-cd ~/lvgl_micropython_build/lvgl_micropython
-# Editar api_drivers/common_api_drivers/indev/xpt2046.py con valores correctos
-python3 make.py esp32 BOARD=ESP32_GENERIC DISPLAY=ili9341 INDEV=xpt2046 --flash-size=4
+# Subir como main temporal
+python -m mpremote connect COM7 cp cal_measure.py :main.py
+python -m mpremote connect COM7 reset
+# Tocar TL, TR, BL, BR con lápiz y anotar TP_DATA values
+# Restaurar main original después
+python -m mpremote connect COM7 cp main.py :main.py  # (renombrar primero)
 ```
-El firmware compilado queda en build/lvgl_micropy_ESP32_GENERIC-4.bin
-Copiarlo a Windows: cp build/lvgl_micropy_ESP32_GENERIC-4.bin /mnt/c/dev/py/esp3224/firmware.bin
 
-### Flashear firmware (procedimiento correcto)
+#### Paso 3: Calcular valores correctos
+Con los raw de las 4 esquinas:
+- px = remap(y, y_TL, y_TR, 0, 320)  # y_TL=izquierda, y_TR=derecha
+- py = remap(x, x_TL, x_BL, 0, 240)  # x_TL=arriba, x_BL=abajo
+
+#### Paso 4: Recompilar firmware con valores baked in
+```bash
+# En WSL2
+cd ~/lvgl_micropython_build/lvgl_micropython
+# Editar api_drivers/common_api_drivers/indev/xpt2046.py
+python3 make.py esp32 BOARD=ESP32_GENERIC DISPLAY=ili9341 INDEV=xpt2046 --flash-size=4
+cp build/lvgl_micropy_ESP32_GENERIC-4.bin /mnt/c/dev/py/esp3224/firmware.bin
+```
+
+### Procedimiento de flash (IMPORTANTE - requiere modo bootloader manual)
 1. Mantener BOOT presionado
 2. Presionar y soltar RESET
 3. Soltar BOOT
-4. Ejecutar: `python -m esptool --chip esp32 --port COM7 -b 460800 write-flash --flash-mode dio --flash-size 4MB --flash-freq 40m --erase-all 0x0 firmware.bin`
+4. Ejecutar inmediatamente:
+```
+python -m esptool --chip esp32 --port COM7 -b 460800 write-flash --flash-mode dio --flash-size 4MB --flash-freq 40m --erase-all 0x0 firmware.bin
+```
 
-### Subir archivos después de flash
+### Subir archivos después de flash limpio
 ```
 python -m mpremote connect COM7 exec "import os; [os.mkdir(d) for d in ['app','app/ports','app/domain','app/ui']]; print('OK')"
 
 python -m mpremote connect COM7 cp app/__init__.py :app/__init__.py + cp app/ports/display_port.py :app/ports/display_port.py + cp app/ports/led_port.py :app/ports/led_port.py + cp app/domain/counter_service.py :app/domain/counter_service.py + cp app/domain/led_service.py :app/domain/led_service.py + cp app/ui/components.py :app/ui/components.py + cp app/ui/screens.py :app/ui/screens.py + cp main.py :main.py + reset
 ```
 
-### IMPORTANTE: No subir xpt2046.py al filesystem
-El firmware frozen tiene el xpt2046.py correcto. Si se sube uno al filesystem
-puede quedar corrupto (problema que tuvimos hoy). Mejor compilar con los valores
-correctos baked in.
+### ADVERTENCIA: No dejar procesos python zombie
+Antes de flashear, verificar que no hay procesos mpremote corriendo:
+- Desconectar/reconectar USB libera el puerto
+- taskkill /F /IM python.exe si es necesario
 
 ## Hardware
 - Board: ESP32-2432S028R (Cheap Yellow Display 2.8")
@@ -98,10 +128,10 @@ correctos baked in.
 - WSL2: Ubuntu-22.04, usuario fury
 - Build dir: ~/lvgl_micropython_build/lvgl_micropython
 
-## Archivos importantes
-- `firmware.bin` — último firmware compilado (en workspace Windows)
+## Archivos importantes en workspace
+- `firmware.bin` — último firmware compilado
 - `xpt2046.py` — driver touch con calibración actual
-- `app/ui/components.py` — scroll deshabilitado
-- `app/ui/screens.py` — prints para video
-- `cal_measure.py` — script para medir raw del touch
-- `FIRMWARE_BUILD_GUIDE.md` — guía completa de compilación
+- `app/ui/components.py` — scroll deshabilitado (set_scrollbar_mode OFF)
+- `app/ui/screens.py` — prints para video en botones
+- `cal_measure.py` — script para medir raw del touch (subir como main temporal)
+- `FIRMWARE_BUILD_GUIDE.md` — guía completa de compilación y calibración
